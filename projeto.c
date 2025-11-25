@@ -1,0 +1,356 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <windows.h>
+
+/* ======================= Config DLL ======================= */
+// Handle da DLL carregada dinamicamente
+static HMODULE g_hDll = NULL;
+
+/* Convenção de chamada (Windows): __stdcall */
+// Isso garante que as funções da DLL usem o mesmo padrão de empilhamento do Windows
+#ifndef CALLCONV
+#  define CALLCONV WINAPI
+#endif
+
+/* ======================= Assinaturas da DLL ======================= */
+// Definição dos tipos de função que serão importados da DLL
+// Cada typedef corresponde a uma função real da DLL
+typedef int (CALLCONV *AbreConexaoImpressora_t)(int, const char *, const char *, int);
+typedef int (CALLCONV *FechaConexaoImpressora_t)(void);
+typedef int (CALLCONV *ImpressaoTexto_t)(const char *, int, int, int);
+typedef int (CALLCONV *Corte_t)(int);
+typedef int (CALLCONV *ImpressaoQRCode_t)(const char *, int, int);
+typedef int (CALLCONV *ImpressaoCodigoBarras_t)(int, const char *, int, int, int);
+typedef int (CALLCONV *AvancaPapel_t)(int);
+typedef int (CALLCONV *AbreGavetaElgin_t)(int, int, int);
+typedef int (CALLCONV *AbreGaveta_t)(int, int, int);
+typedef int (CALLCONV *SinalSonoro_t)(int, int, int);
+typedef int (CALLCONV *ImprimeXMLSAT_t)(const char *, int);
+typedef int (CALLCONV *ImprimeXMLCancelamentoSAT_t)(const char *, const char *, int);
+typedef int (CALLCONV *InicializaImpressora_t)(void);
+
+/* ======================= Ponteiros ======================= */
+// Ponteiros para funções que serão carregadas dinamicamente
+static AbreConexaoImpressora_t        AbreConexaoImpressora        = NULL;
+static FechaConexaoImpressora_t       FechaConexaoImpressora       = NULL;
+static ImpressaoTexto_t               ImpressaoTexto               = NULL;
+static Corte_t                        Corte                        = NULL;
+static ImpressaoQRCode_t              ImpressaoQRCode              = NULL;
+static ImpressaoCodigoBarras_t        ImpressaoCodigoBarras        = NULL;
+static AvancaPapel_t                  AvancaPapel                  = NULL;
+static AbreGavetaElgin_t              AbreGavetaElgin              = NULL;
+static AbreGaveta_t                   AbreGaveta                   = NULL;
+static SinalSonoro_t                  SinalSonoro                  = NULL;
+static ImprimeXMLSAT_t                ImprimeXMLSAT                = NULL;
+static ImprimeXMLCancelamentoSAT_t    ImprimeXMLCancelamentoSAT    = NULL;
+static InicializaImpressora_t         InicializaImpressora         = NULL;
+
+/* ======================= Configuração ======================= */
+// Variáveis globais que armazenam as configurações da impressora
+static int   g_tipo      = 1;           // Tipo de conexão (1=USB, 2=Serial, 3=Rede)
+static char  g_modelo[64] = "i9";       // Modelo padrão da impressora
+static char  g_conexao[128] = "USB";    // Conexão padrão
+static int   g_parametro = 0;           // Parâmetro adicional
+static int   g_conectada = 0;           // Flag para saber se a impressora está conectada
+
+/* ======================= Utilidades ======================= */
+// Macro para carregar funções da DLL de forma segura
+#define LOAD_FN(h, name)                                                         \
+    do {                                                                         \
+        name = (name##_t)GetProcAddress((HMODULE)(h), #name);                    \
+        if (!(name)) {                                                           \
+            fprintf(stderr, "Falha ao resolver símbolo %s (erro=%lu)\n",         \
+                    #name, GetLastError());                                      \
+            return 0;                                                            \
+        }                                                                        \
+    } while (0)
+
+// Função auxiliar para limpar o buffer do teclado (usada após scanf)
+static void flush_entrada(void) {
+    int c;
+    while ((c = getchar()) != '\n' && c != EOF) { }
+}
+
+/* ======================= DLL ======================= */
+// Carrega a DLL e obtém os endereços das funções
+static int carregarFuncoes(void)
+{
+    g_hDll = LoadLibraryA("E1_Impressora01.dll"); // Tenta carregar a DLL
+    if (!g_hDll) {
+        fprintf(stderr, "Erro ao carregar E1_Impressora01.dll (erro=%lu)\n", GetLastError());
+        return;
+    }
+
+    // Carrega os ponteiros das funções exportadas pela DLL
+    LOAD_FN(g_hDll, AbreConexaoImpressora);
+    LOAD_FN(g_hDll, FechaConexaoImpressora);
+    LOAD_FN(g_hDll, ImpressaoTexto);
+    LOAD_FN(g_hDll, Corte);
+    LOAD_FN(g_hDll, ImpressaoQRCode);
+    LOAD_FN(g_hDll, ImpressaoCodigoBarras);
+    LOAD_FN(g_hDll, AvancaPapel);
+    LOAD_FN(g_hDll, AbreGavetaElgin);
+    LOAD_FN(g_hDll, AbreGaveta);
+    LOAD_FN(g_hDll, SinalSonoro);
+    LOAD_FN(g_hDll, ImprimeXMLSAT);
+    LOAD_FN(g_hDll, ImprimeXMLCancelamentoSAT);
+    LOAD_FN(g_hDll, InicializaImpressora);
+
+    return 1; // DLL carregada com sucesso
+}
+
+// Libera a DLL da memória quando não for mais usada
+static void liberarBiblioteca(void)
+{
+    if (g_hDll) {
+        FreeLibrary(g_hDll);
+        g_hDll = NULL;
+    }
+}
+
+/* ======================= Funções do menu ======================= */
+
+
+static void exibirMenu(void)
+{
+	//Menu inicial do terminal
+	
+    printf("\n===================== MENU IMPRESSORA ELGIN =====================\n");
+    printf("1 - Configurar conexão\n");
+    printf("2 - Abrir conexão\n");
+    printf("3 - Fechar conexão\n");
+    printf("4 - Imprimir texto\n");
+    printf("5 - Imprimir QRCode\n");
+    printf("6 - Imprimir código de barras\n");
+    printf("7 - Imprimir XML SAT\n");
+    printf("8 - Imprimir XML Cancelamento SAT\n");
+    printf("9 - Abrir gaveta (Elgin)\n");
+    printf("10 - Abrir gaveta (genérico)\n");
+    printf("11 - Emitir sinal sonoro\n");
+    printf("0 - Sair\n");
+    printf("================================================================\n");
+    printf("Escolha uma opção: ");
+}
+
+
+static void configurarConexao(void)
+{
+	// Configuração da conexão com a impressora
+    printf("Informe o tipo \n1-USB\n2-Serial\n3-Rede\n");
+    scanf("%d", &g_tipo);
+    // Valida o tipo de conexão
+    if (g_tipo < 1 || g_tipo > 3) {
+        printf("ERRO, TENTE NOVAMENTE");
+        Sleep(2000);
+        return;
+    }
+    flush_entrada();
+
+    int modelo_opcao;
+    printf("Informe o modelo \n1-i7\n2-i8\n3-i9\n");
+    scanf("%d", &modelo_opcao);
+    flush_entrada();
+    // Seleciona o modelo baseado na opção escolhida
+    switch(modelo_opcao) {
+        case 1: strcpy(g_modelo, "i7"); break;
+        case 2: strcpy(g_modelo, "i8"); break;
+        case 3: strcpy(g_modelo, "i9"); break;
+        default:
+            printf("ERRO, TENTE NOVAMENTE");
+            Sleep(2000);
+            return;
+    }
+	
+	//Informar a conexão aqui
+    printf("Informe a conexão (ex: USB, COM3, 192.168.0.100): ");
+    fgets(g_conexao, sizeof(g_conexao), stdin);
+    g_conexao[strcspn(g_conexao, "\n")] = 0; 
+
+	// Parametro da impressora
+    printf("Informe o parâmetro (geralmente 0): ");
+    scanf("%d", &g_parametro);
+    flush_entrada();
+
+    printf("Configuração salva!\n");
+}
+
+
+static void abrirConexao(void)
+{
+    int ret = AbreConexaoImpressora(g_tipo, g_modelo, g_conexao, g_parametro); 
+    if (ret == 0) {
+        printf("Conexão aberta com sucesso!\n"); // Abre a conexão
+        g_conectada = 1;
+    } else {
+        printf("Erro ao abrir conexão (código=%d)\n", ret); 
+    }
+}
+
+// Fecha a conexão
+static void fecharConexao(void)
+{
+    if (g_conectada == 0) { // Puxa para ver se tem alguma conexão sendo feita
+        printf("Nenhuma conexão aberta.\n");
+        return;
+    }
+    int ret = FechaConexaoImpressora();
+    if (ret == 0) {
+        printf("Conexão fechada com sucesso.\n"); // Fecha a conexão
+        g_conectada = 0;
+    } else {
+        printf("Erro ao fechar conexão (código=%d)\n", ret); // Mensagem de erro se não conseguir fechar
+    }
+}
+
+// Envia texto para a impressora
+static void imprimirTexto(void)
+{
+    char texto[256];
+    printf("Digite o texto para imprimir: "); // Escrever qualquer coisa aqui que vai ser impresso
+    fgets(texto, sizeof(texto), stdin); 
+    texto[strcspn(texto, "\n")] = 0;
+
+    // Impressão de texto simples
+    ImpressaoTexto(texto, 0, 0, 0);
+    AvancaPapel(10); // Avança o papel
+    Corte(0);        // Faz o corte total
+}
+
+// Imprime um QRCode com o conteúdo digitado
+static void imprimirQRCode(void)
+{
+    char conteudo[256];
+    printf("Digite o conteúdo do QRCode: "); //Escrever qualquer coisa aqui que vai ser exibido no QRCode
+    fgets(conteudo, sizeof(conteudo), stdin);
+    conteudo[strcspn(conteudo, "\n")] = 0;
+
+    ImpressaoQRCode(conteudo, 6, 4); // Tamanho e correção do QR
+    AvancaPapel(10);
+    Corte(0);
+}
+
+// Imprime um código de barras fixo aleatório
+static void imprimirCodigoBarras(void)
+{
+    ImpressaoCodigoBarras(8, "{A012345678912", 100, 2, 3);
+    AvancaPapel(10);
+    Corte(0);
+}
+
+// Imprime o arquivo XML SAT 
+static void imprimirXMLSAT(void)
+{
+    FILE *f = fopen("./XMLSAT.xml", "rb"); // Abre o arquivo XML em modo binário
+    if (!f) {
+        // Erro ao abrir o arquivo XML 
+        printf("Erro ao abrir XMLSAT.xml\n");
+        return;
+    }
+
+    // Lê o arquivo XML
+    fseek(f, 0, SEEK_END); // Vai para o final do arquivo
+    long len = ftell(f); // Pega o tamanho do arquivo
+    rewind(f); // Volta para o início do arquivo
+    char *xml = (char *)malloc(len + 1); // Aloca memória para o conteúdo do XML
+    fread(xml, 1, len, f); // Lê o conteúdo do arquivo
+    xml[len] = 0; // Adiciona o terminador de string
+    fclose(f); // Fecha o arquivo
+
+    // Manda o XML para a impressora
+    ImprimeXMLSAT(xml, 0);
+    AvancaPapel(10);
+    Corte(0);
+    free(xml);
+}
+
+// Imprime o XML de cancelamento do SAT (com assinatura)
+static void imprimirXMLCancelamentoSAT(void)
+{
+    // Abre o arquivo XML de cancelamento
+    FILE *f = fopen("./CANC_SAT.xml", "rb"); // Abre o arquivo em modo binário
+    if (!f) {
+        printf("Erro ao abrir CANC_SAT.xml\n"); // Erro ao abrir o arquivo
+        return;
+    }
+
+    // Lê o arquivo XML de cancelamento
+    fseek(f, 0, SEEK_END);
+    long len = ftell(f);
+    rewind(f);
+    char *xml = (char *)malloc(len + 1);
+    fread(xml, 1, len, f);
+    xml[len] = 0;
+    fclose(f);
+
+    // Assinatura digital obrigatória
+    const char *assinatura =
+        "Q5DLkpdRijIRGY6YSSNsTWK1TztHL1vD0V1Jc4spo/CEUqICEb9SFy82ym8EhBRZ"
+        "jbh3btsZhF+sjHqEMR159i4agru9x6KsepK/q0E2e5xlU5cv3m1woYfgHyOkWDNc"
+        "SdMsS6bBh2Bpq6s89yJ9Q6qh/J8YHi306ce9Tqb/drKvN2XdE5noRSS32TAWuaQE"
+        "Vd7u+TrvXlOQsE3fHR1D5f1saUwQLPSdIv01NF6Ny7jZwjCwv1uNDgGZONJdlTJ6"
+        "p0ccqnZvuE70aHOI09elpjEO6Cd+orI7XHHrFCwhFhAcbalc+ZfO5b/+vkyAHS6C"
+        "YVFCDtYR9Hi5qgdk31v23w==";
+
+    // Chamada da função da DLL que imprime o XML de cancelamento
+    ImprimeXMLCancelamentoSAT(xml, assinatura, 0);
+    AvancaPapel(10);
+    Corte(0);
+    free(xml); // Libera a memória alocada
+}
+
+// Abre a gaveta da impressora Elgin
+static void abrirGavetaElginOpc(void)
+{
+    AbreGavetaElgin(1, 50, 50);
+}
+
+// Abre a gaveta de uma impressora qualquer
+static void abrirGavetaOpc(void)
+{
+    AbreGaveta(1, 5, 10); 
+}
+
+// Faz um bip 
+static void emitirSinalSonoro(void) 
+{
+    SinalSonoro(4, 50, 5);
+}
+
+/* ======================= Função principal ======================= */
+int main(void)
+{
+    // Tenta carregar a DLL da impressora
+    if (!carregarFuncoes()) {
+        return 1;
+    }
+
+    int opcao = -1;
+    // Loop principal do menu
+    while (opcao != 0) {
+        exibirMenu();        // Mostra o menu
+        scanf("%d", &opcao); // Lê a opção do usuário
+        flush_entrada();     // 
+
+        // Chama a função que você escolhe na função exibirMenu
+        switch (opcao) {
+            case 1: configurarConexao(); break;
+            case 2: abrirConexao(); break;
+            case 3: fecharConexao(); break;
+            case 4: imprimirTexto(); break;
+            case 5: imprimirQRCode(); break;
+            case 6: imprimirCodigoBarras(); break;
+            case 7: imprimirXMLSAT(); break;
+            case 8: imprimirXMLCancelamentoSAT(); break;
+            case 9: abrirGavetaElginOpc(); break;
+            case 10: abrirGavetaOpc(); break;
+            case 11: emitirSinalSonoro(); break;
+            case 0: printf("Saindo...\n"); break;
+            default: printf("Opção inválida!\n"); break;
+        }
+    }
+
+    // Libera a DLL antes de encerrar o programa
+    liberarBiblioteca();
+    return 0;
+}
