@@ -1,5 +1,19 @@
 # Comunicacao-com-impressora-Elgin
 
+Grupo formado por: Andrey Trolezi, Bruno Juvenal, Pedro Vito e William Pimentel
+
+Projeto em C para comunicação com impressora de cupom fiscal.
+
+Como usar:
+
+1- Baixe e extraia os arquivos;
+2- Conecte a impressora em seu computador;
+3- Execute o arquivo "projeto.c";
+4- Faça a configuração e selecione o modelo da sua impressora;
+5- Escolha a opção desejada para impressão.
+
+Explicação das funções: 
+
 O funcionamento se deve ao uso da biblioteca para importar os arquivos e ter comunicação com as impressoras elgin e genéricas
 
 Tem as seguintes funções:
